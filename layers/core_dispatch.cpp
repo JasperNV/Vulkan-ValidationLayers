@@ -1004,13 +1004,13 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateImageView(VkDevice device, const VkImageVie
                                                const VkAllocationCallbacks *pAllocator, VkImageView *pView) {
     layer_data *dev_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     unique_lock_t lock(global_lock);
-    bool skip = PreCallValidateCreateImageView(dev_data, pCreateInfo);
+    bool skip = PreCallValidateCreateImageView(device, pCreateInfo, pAllocator, pView);
     lock.unlock();
     if (skip) return VK_ERROR_VALIDATION_FAILED_EXT;
     VkResult result = dev_data->dispatch_table.CreateImageView(device, pCreateInfo, pAllocator, pView);
     if (VK_SUCCESS == result) {
         lock.lock();
-        PostCallRecordCreateImageView(dev_data, pCreateInfo, *pView);
+        PostCallRecordCreateImageView(device, pCreateInfo, pAllocator, pView);
         lock.unlock();
     }
 

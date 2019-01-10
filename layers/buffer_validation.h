@@ -237,9 +237,11 @@ bool ValidateImageBarrierSubresourceRange(const layer_data *device_data, const I
                                           const VkImageSubresourceRange &subresourceRange, const char *cmd_name,
                                           const char *param_name);
 
-bool PreCallValidateCreateImageView(layer_data *device_data, const VkImageViewCreateInfo *create_info);
+bool PreCallValidateCreateImageView(VkDevice device, const VkImageViewCreateInfo *pCreateInfo,
+                                    const VkAllocationCallbacks *pAllocator, VkImageView *pView);
 
-void PostCallRecordCreateImageView(layer_data *device_data, const VkImageViewCreateInfo *create_info, VkImageView view);
+void PostCallRecordCreateImageView(VkDevice device, const VkImageViewCreateInfo *pCreateInfo,
+                                   const VkAllocationCallbacks *pAllocator, VkImageView *pView);
 
 bool ValidateCopyBufferImageTransferGranularityRequirements(layer_data *device_data, const GLOBAL_CB_NODE *cb_node,
                                                             const IMAGE_STATE *img, const VkBufferImageCopy *region,
