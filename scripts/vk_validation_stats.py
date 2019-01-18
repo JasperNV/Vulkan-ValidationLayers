@@ -142,11 +142,11 @@ def printHelp():
     print ("Usage:")
     print ("  python vk_validation_stats.py <json_file>")
     print ("                                [ -c ]")
-    print ("                                [ -todo ]")
+    print ("                                [ -todo [ <extension_name> ] ]")
     print ("                                [ -vuid <vuid_name> ]")
-    print ("                                [ -text [ <text_out_filename>] ]")
-    print ("                                [ -csv  [ <csv_out_filename>]  ]")
-    print ("                                [ -html [ <html_out_filename>] ]")
+    print ("                                [ -text [ <text_out_filename> ] ]")
+    print ("                                [ -csv  [ <csv_out_filename> ] ]")
+    print ("                                [ -html [ <html_out_filename> ] ]")
     print ("                                [ -export_header ]")
     print ("                                [ -verbose ]")
     print ("                                [ -help ]")
@@ -157,13 +157,13 @@ def printHelp():
     print ("\nArguments: ")
     print (" <json-file>       (required) registry file 'validusage.json'")
     print (" -c                report consistency warnings")
-    print (" -todo             report unimplemented VUIDs")
+    print (" -todo [extension] report unimplemented VUIDs, optionally filtering on <extension>")
     print (" -vuid <vuid_name> report status of individual VUID <vuid_name>")
-    print (" -text [filename]  output the error database text to <text_database_filename>,")
+    print (" -text [filename]  output the error database text to <filename>,")
     print ("                   defaults to 'validation_error_database.txt'")
-    print (" -csv [filename]   output the error database in csv to <csv_database_filename>,")
+    print (" -csv [filename]   output the error database in csv to <filename>,")
     print ("                   defaults to 'validation_error_database.csv'")
-    print (" -html [filename]  output the error database in html to <html_database_filename>,")
+    print (" -html [filename]  output the error database in html to <filename>,")
     print ("                   defaults to 'validation_error_database.html'")
     print (" -export_header    export a new VUID error text header file to <%s>" % header_filename)
     print (" -verbose          show your work (to stdout)")
@@ -615,6 +615,7 @@ def main(argv):
 
     run_consistency = False
     report_unimplemented = False
+    report_unimplemented_extension = None
     get_vuid_status = ''
     txt_out = False
     csv_out = False
@@ -638,6 +639,9 @@ def main(argv):
             i = i + 1
         elif (arg == '-todo'):
             report_unimplemented = True
+            if i < len(argv) and not argv[i].startswith('-'):
+                report_unimplemented_extension = argv[i]
+                i = i + 1
         elif (arg == '-text'):
             txt_out = True
             # Set filename if supplied, else use default
@@ -757,8 +761,10 @@ def main(argv):
     # Report unimplemented explicit VUIDs
     if report_unimplemented:
         unim_explicit = val_json.explicit_vuids - val_source.explicit_vuids
-        print("\n\n%d explicit VUID checks remain unimplemented:" % len(unim_explicit))
         ulist = list(unim_explicit)
+        if report_unimplemented_extension is not None:
+            ulist = [vuid for vuid in ulist if any((report_unimplemented_extension in db_entry['ext']) for db_entry in val_json.vuid_db[vuid])]
+        print("\n\n%d explicit VUID checks remain unimplemented:" % len(ulist))
         ulist.sort()
         for vuid in ulist:
             print("  => %s" % vuid) 
