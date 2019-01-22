@@ -303,12 +303,12 @@ class StatelessValidation : public ValidationObject {
     bool validate_struct_type_array(const char *apiName, const ParameterName &countName, const ParameterName &arrayName,
                                     const char *sTypeName, uint32_t count, const T *array, VkStructureType sType,
                                     bool countRequired, bool arrayRequired, const std::string &stype_vuid,
-                                    const std::string &param_vuid) {
+                                    const std::string &param_vuid, const std::string& count_required_vuid) {
         bool skip_call = false;
 
         if ((count == 0) || (array == NULL)) {
-            skip_call |= validate_array(apiName, countName, arrayName, count, &array, countRequired, arrayRequired, kVUIDUndefined,
-                                        param_vuid);
+            skip_call |= validate_array(apiName, countName, arrayName, count, &array, countRequired, arrayRequired,
+                                        count_required_vuid, param_vuid);
         } else {
             // Verify that all structs in the array have the correct type
             for (uint32_t i = 0; i < count; ++i) {
@@ -347,7 +347,8 @@ class StatelessValidation : public ValidationObject {
     bool validate_struct_type_array(const char *apiName, const ParameterName &countName, const ParameterName &arrayName,
                                     const char *sTypeName, uint32_t *count, const T *array, VkStructureType sType,
                                     bool countPtrRequired, bool countValueRequired, bool arrayRequired,
-                                    const std::string &stype_vuid, const std::string &param_vuid) {
+                                    const std::string &stype_vuid, const std::string &param_vuid,
+                                    const std::string &count_required_vuid) {
         bool skip_call = false;
 
         if (count == NULL) {
@@ -358,7 +359,7 @@ class StatelessValidation : public ValidationObject {
             }
         } else {
             skip_call |= validate_struct_type_array(apiName, countName, arrayName, sTypeName, (*count), array, sType,
-                                                    countValueRequired, arrayRequired, stype_vuid, param_vuid);
+                                                    countValueRequired, arrayRequired, stype_vuid, param_vuid, count_required_vuid);
         }
 
         return skip_call;
