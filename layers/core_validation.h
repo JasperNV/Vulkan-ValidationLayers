@@ -1507,7 +1507,7 @@ bool PreCallValidateEndCommandBuffer(layer_data* dev_data, GLOBAL_CB_NODE* cb_st
 void PostCallRecordEndCommandBuffer(layer_data* dev_data, GLOBAL_CB_NODE* cb_state, const VkResult& result);
 bool PreCallValidateResetCommandBuffer(layer_data* dev_data, VkCommandBuffer commandBuffer);
 void PostCallRecordResetCommandBuffer(layer_data* dev_data, VkCommandBuffer commandBuffer);
-bool PreCallValidateCmdBindPipeline(layer_data* dev_data, GLOBAL_CB_NODE* cb_state);
+bool PreCallValidateCmdBindPipeline(layer_data* dev_data, GLOBAL_CB_NODE* cb_state, VkPipelineBindPoint bind_point, VkPipeline pipeline);
 void PreCallRecordCmdBindPipeline(layer_data* dev_data, GLOBAL_CB_NODE* cb_state, VkPipelineBindPoint pipelineBindPoint,
                                   VkPipeline pipeline);
 bool PreCallValidateCmdSetViewport(layer_data* dev_data, GLOBAL_CB_NODE* cb_state, VkCommandBuffer commandBuffer);

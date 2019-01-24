@@ -6107,12 +6107,65 @@ void PostCallRecordResetCommandBuffer(layer_data *dev_data, VkCommandBuffer comm
     ResetCommandBufferState(dev_data, commandBuffer);
 }
 
-bool PreCallValidateCmdBindPipeline(layer_data *dev_data, GLOBAL_CB_NODE *cb_state) {
+// Validates that the supplied bind point is supported for the command buffer (vis. the command pool)
+// Takes array of error codes as some of the VUID's (e.g. vkCmdBindPipeline) are written per bindpoint
+static bool ValidatePipelineBindPoint(layer_data *device_data, GLOBAL_CB_NODE *cb_state, VkPipelineBindPoint bind_point,
+                                      const char *func_name, const std::map<VkPipelineBindPoint, std::string> &bind_errors) {
+    bool skip = false;
+    auto pool = GetCommandPoolNode(device_data, cb_state->createInfo.commandPool);
+    if (pool) {  // The loss of a pool in a recording cmd is reported in DestroyCommandPool
+        static const std::map<VkPipelineBindPoint, VkQueueFlags> flag_mask = {
+            std::make_pair(VK_PIPELINE_BIND_POINT_GRAPHICS, static_cast<VkQueueFlags>(VK_QUEUE_GRAPHICS_BIT)),
+            std::make_pair(VK_PIPELINE_BIND_POINT_COMPUTE, static_cast<VkQueueFlags>(VK_QUEUE_COMPUTE_BIT)),
+            std::make_pair(VK_PIPELINE_BIND_POINT_RAY_TRACING_NV,
+                           static_cast<VkQueueFlags>(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)),
+        };
+        const auto &qfp = GetPhysDevProperties(device_data)->queue_family_properties[pool->queueFamilyIndex];
+        if (0 == (qfp.queueFlags & flag_mask.at(bind_point))) {
+            const std::string error = bind_errors.at(bind_point);
+            auto cb_u64 = HandleToUint64(cb_state->commandBuffer);
+            auto cp_u64 = HandleToUint64(cb_state->createInfo.commandPool);
+            skip |= log_msg(device_data->report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT,
+                            cb_u64, error,
+                            "%s: CommandBuffer 0x%" PRIxLEAST64 " was allocated from VkCommandPool 0x%" PRIxLEAST64
+                            " that does not support bindpoint %s.",
+                            func_name, cb_u64, cp_u64, string_VkPipelineBindPoint(bind_point));
+        }
+    }
+    return skip;
+}
+
+bool PreCallValidateCmdBindPipeline(layer_data *dev_data, GLOBAL_CB_NODE *cb_state, VkPipelineBindPoint bind_point,
+                                    VkPipeline pipeline) {
     bool skip = ValidateCmdQueueFlags(dev_data, cb_state, "vkCmdBindPipeline()", VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT,
                                       "VUID-vkCmdBindPipeline-commandBuffer-cmdpool");
     skip |= ValidateCmd(dev_data, cb_state, CMD_BINDPIPELINE, "vkCmdBindPipeline()");
-    // TODO: "VUID-vkCmdBindPipeline-pipelineBindPoint-00777" "VUID-vkCmdBindPipeline-pipelineBindPoint-00779"  -- using
-    // ValidatePipelineBindPoint
+    static const std::map<VkPipelineBindPoint, std::string> bindpoint_errors = {
+        std::make_pair(VK_PIPELINE_BIND_POINT_GRAPHICS, "VUID-vkCmdBindPipeline-pipelineBindPoint-00777"),
+        std::make_pair(VK_PIPELINE_BIND_POINT_COMPUTE, "VUID-vkCmdBindPipeline-pipelineBindPoint-00778"),
+        std::make_pair(VK_PIPELINE_BIND_POINT_RAY_TRACING_NV, "VUID-vkCmdBindPipeline-pipelineBindPoint-02391")};
+
+    skip |= ValidatePipelineBindPoint(dev_data, cb_state, bind_point, "vkCmdBindPipeline()", bindpoint_errors);
+
+    auto pipeline_state = GetPipelineState(dev_data, pipeline);
+    assert(pipeline_state);
+    if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+        if (!pipeline_state->isGraphicsPipeline()) {
+            skip |= log_msg(dev_data->report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT,
+                            HandleToUint64(cb_state->commandBuffer), "VUID-vkCmdBindPipeline-pipelineBindPoint-00779", "");
+        }
+    } else if (bind_point == VK_PIPELINE_BIND_POINT_COMPUTE) {
+        if (!pipeline_state->isComputePipeline()) {
+            skip |= log_msg(dev_data->report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT,
+                            HandleToUint64(cb_state->commandBuffer), "VUID-vkCmdBindPipeline-pipelineBindPoint-00780", "");
+        }
+    } else if (bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_NV) {
+        if (!pipeline_state->isRayTracingPipeline()) {
+            skip |= log_msg(dev_data->report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT,
+                            HandleToUint64(cb_state->commandBuffer), "VUID-vkCmdBindPipeline-pipelineBindPoint-02392", "");
+        }
+    }
+
     return skip;
 }
 
@@ -6623,35 +6676,6 @@ bool PreCallValidateCmdBindDescriptorSets(layer_data *device_data, GLOBAL_CB_NOD
                         "Attempting to bind %u descriptorSets with %u dynamic descriptors, but dynamicOffsetCount is %u. It should "
                         "exactly match the number of dynamic descriptors.",
                         setCount, total_dynamic_descriptors, dynamicOffsetCount);
-    }
-    return skip;
-}
-
-// Validates that the supplied bind point is supported for the command buffer (vis. the command pool)
-// Takes array of error codes as some of the VUID's (e.g. vkCmdBindPipeline) are written per bindpoint
-// TODO add vkCmdBindPipeline bind_point validation using this call.
-bool ValidatePipelineBindPoint(layer_data *device_data, GLOBAL_CB_NODE *cb_state, VkPipelineBindPoint bind_point,
-                               const char *func_name, const std::map<VkPipelineBindPoint, std::string> &bind_errors) {
-    bool skip = false;
-    auto pool = GetCommandPoolNode(device_data, cb_state->createInfo.commandPool);
-    if (pool) {  // The loss of a pool in a recording cmd is reported in DestroyCommandPool
-        static const std::map<VkPipelineBindPoint, VkQueueFlags> flag_mask = {
-            std::make_pair(VK_PIPELINE_BIND_POINT_GRAPHICS, static_cast<VkQueueFlags>(VK_QUEUE_GRAPHICS_BIT)),
-            std::make_pair(VK_PIPELINE_BIND_POINT_COMPUTE, static_cast<VkQueueFlags>(VK_QUEUE_COMPUTE_BIT)),
-            std::make_pair(VK_PIPELINE_BIND_POINT_RAY_TRACING_NV,
-                           static_cast<VkQueueFlags>(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)),
-        };
-        const auto &qfp = GetPhysDevProperties(device_data)->queue_family_properties[pool->queueFamilyIndex];
-        if (0 == (qfp.queueFlags & flag_mask.at(bind_point))) {
-            const std::string error = bind_errors.at(bind_point);
-            auto cb_u64 = HandleToUint64(cb_state->commandBuffer);
-            auto cp_u64 = HandleToUint64(cb_state->createInfo.commandPool);
-            skip |= log_msg(device_data->report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT,
-                            cb_u64, error,
-                            "%s: CommandBuffer 0x%" PRIxLEAST64 " was allocated from VkCommandPool 0x%" PRIxLEAST64
-                            " that does not support bindpoint %s.",
-                            func_name, cb_u64, cp_u64, string_VkPipelineBindPoint(bind_point));
-        }
     }
     return skip;
 }

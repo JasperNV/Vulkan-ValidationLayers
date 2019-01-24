@@ -3660,7 +3660,7 @@ VKAPI_ATTR void VKAPI_CALL CmdBindPipeline(VkCommandBuffer commandBuffer, VkPipe
     unique_lock_t lock(global_lock);
     GLOBAL_CB_NODE *cb_state = GetCBNode(dev_data, commandBuffer);
     if (cb_state) {
-        skip |= PreCallValidateCmdBindPipeline(dev_data, cb_state);
+        skip |= PreCallValidateCmdBindPipeline(dev_data, cb_state, pipelineBindPoint, pipeline);
         PreCallRecordCmdBindPipeline(dev_data, cb_state, pipelineBindPoint, pipeline);
     }
     lock.unlock();
