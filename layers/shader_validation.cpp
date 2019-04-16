@@ -2819,7 +2819,14 @@ bool CoreChecks::ValidateRayTracingPipelineNV(PIPELINE_STATE *pipeline) {
     SHADER_MODULE_STATE const *module;
     spirv_inst_iter entrypoint;
 
-    return ValidatePipelineShaderStage(pCreateInfo->pStages, pipeline, &module, &entrypoint, false);
+    bool skip = false;
+
+    for (uint32_t i = 0; i < pCreateInfo->stageCount; i++) {
+        auto pStage = &pCreateInfo->pStages[i];
+        skip |= ValidatePipelineShaderStage(pStage, pipeline, &module, &entrypoint, false);
+    }
+
+    return skip;
 }
 
 uint32_t ValidationCache::MakeShaderHash(VkShaderModuleCreateInfo const *smci) { return XXH32(smci->pCode, smci->codeSize, 0); }

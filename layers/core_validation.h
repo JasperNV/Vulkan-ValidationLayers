@@ -228,6 +228,7 @@ class CoreChecks : public ValidationObject {
         VkPhysicalDeviceDepthStencilResolvePropertiesKHR depth_stencil_resolve_props;
         VkPhysicalDeviceCooperativeMatrixPropertiesNV cooperative_matrix_props;
         VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback_props;
+        VkPhysicalDeviceRayTracingPropertiesNV ray_tracing_props;
     };
     DeviceExtensionProperties phys_dev_ext_props = {};
     std::vector<VkCooperativeMatrixPropertiesNV> cooperative_matrix_properties;
@@ -991,6 +992,12 @@ class CoreChecks : public ValidationObject {
                                                VkDescriptorSet* pDescriptorSets, void* ads_state);
     void PostCallRecordAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAllocateInfo* pAllocateInfo,
                                               VkDescriptorSet* pDescriptorSets, VkResult result, void* ads_state);
+    bool ValidateGeometryNV(const char* caller_name, const VkGeometryNV* pGeometry);
+    bool PreCallValidateCreateAccelerationStructureNV(VkDevice device, const VkAccelerationStructureCreateInfoNV* pCreateInfo,
+                                                      const VkAllocationCallbacks* pAllocator,
+                                                      VkAccelerationStructureNV* pAccelerationStructure);
+    bool ValidateRayTracingPipelineNVLocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines, uint32_t pipelineIndex);
+    bool ValidateRayTracingPipelineNVUnlocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines, uint32_t pipelineIndex);
     bool PreCallValidateCreateRayTracingPipelinesNV(VkDevice device, VkPipelineCache pipelineCache, uint32_t count,
                                                     const VkRayTracingPipelineCreateInfoNV* pCreateInfos,
                                                     const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines,
