@@ -1163,28 +1163,10 @@ class PIPELINE_STATE : public BASE_NODE {
     void initRayTracingPipelineNV(const VkRayTracingPipelineCreateInfoNV *pCreateInfo) {
         reset();
         raytracingPipelineCI.initialize(pCreateInfo);
-        switch (raytracingPipelineCI.pStages->stage) {
-            case VK_SHADER_STAGE_RAYGEN_BIT_NV:
-                this->active_shaders |= VK_SHADER_STAGE_RAYGEN_BIT_NV;
-                break;
-            case VK_SHADER_STAGE_ANY_HIT_BIT_NV:
-                this->active_shaders |= VK_SHADER_STAGE_ANY_HIT_BIT_NV;
-                break;
-            case VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV:
-                this->active_shaders |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV;
-                break;
-            case VK_SHADER_STAGE_MISS_BIT_NV:
-                this->active_shaders = VK_SHADER_STAGE_MISS_BIT_NV;
-                break;
-            case VK_SHADER_STAGE_INTERSECTION_BIT_NV:
-                this->active_shaders = VK_SHADER_STAGE_INTERSECTION_BIT_NV;
-                break;
-            case VK_SHADER_STAGE_CALLABLE_BIT_NV:
-                this->active_shaders |= VK_SHADER_STAGE_CALLABLE_BIT_NV;
-                break;
-            default:
-                // TODO : Flag error
-                break;
+        for (uint32_t i = 0; i < pCreateInfo->stageCount; i++) {
+            const VkPipelineShaderStageCreateInfo *pPSSCI = &pCreateInfo->pStages[i];
+            this->duplicate_shaders |= this->active_shaders & pPSSCI->stage;
+            this->active_shaders |= pPSSCI->stage;
         }
     }
 

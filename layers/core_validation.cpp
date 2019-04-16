@@ -2665,6 +2665,13 @@ void CoreChecks::PostCallRecordCreateDevice(VkPhysicalDevice gpu, const VkDevice
         instance_dispatch_table.GetPhysicalDeviceCooperativeMatrixPropertiesNV(gpu, &numCooperativeMatrixProperties,
                                                                                core_checks->cooperative_matrix_properties.data());
     }
+    if (core_checks->device_extensions.vk_nv_ray_tracing) {
+        // Get the needed ray_tracing properties
+        auto ray_tracing_props = lvl_init_struct<VkPhysicalDeviceRayTracingPropertiesNV>();
+        auto prop2 = lvl_init_struct<VkPhysicalDeviceProperties2KHR>(&ray_tracing_props);
+        instance_dispatch_table.GetPhysicalDeviceProperties2KHR(gpu, &prop2);
+        core_checks->phys_dev_ext_props.ray_tracing_props = ray_tracing_props;
+    }
 
     // Store queue family data
     if ((pCreateInfo != nullptr) && (pCreateInfo->pQueueCreateInfos != nullptr)) {
@@ -3367,29 +3374,29 @@ std::map<uint32_t, VkFormat> ahb_format_map_a2v = {
 };
 
 // AHardwareBuffer Usage                        Vulkan Usage or Creation Flag (Intermixed - Aargh!)
-// =====================                        =================================================== 
+// =====================                        ===================================================
 // None                                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT
 // None                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT
 // AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE      VK_IMAGE_USAGE_SAMPLED_BIT
 // AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE      VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT
 // AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
 // AHARDWAREBUFFER_USAGE_GPU_CUBE_MAP           VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT
-// AHARDWAREBUFFER_USAGE_GPU_MIPMAP_COMPLETE    None 
+// AHARDWAREBUFFER_USAGE_GPU_MIPMAP_COMPLETE    None
 // AHARDWAREBUFFER_USAGE_PROTECTED_CONTENT      VK_IMAGE_CREATE_PROTECTED_BIT
 // None                                         VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT
 // None                                         VK_IMAGE_CREATE_EXTENDED_USAGE_BIT
 
-// Same casting rationale. De-mixing the table to prevent type confusion and aliasing 
+// Same casting rationale. De-mixing the table to prevent type confusion and aliasing
 std::map<uint64_t, VkImageUsageFlags> ahb_usage_map_a2v = {
     { (uint64_t)AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,    (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) },
     { (uint64_t)AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT },
-    { (uint64_t)AHARDWAREBUFFER_USAGE_GPU_MIPMAP_COMPLETE,  0 },   // No equivalent 
+    { (uint64_t)AHARDWAREBUFFER_USAGE_GPU_MIPMAP_COMPLETE,  0 },   // No equivalent
 };
 
 std::map<uint64_t, VkImageCreateFlags> ahb_create_map_a2v = {
     { (uint64_t)AHARDWAREBUFFER_USAGE_GPU_CUBE_MAP,         VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT },
     { (uint64_t)AHARDWAREBUFFER_USAGE_PROTECTED_CONTENT,    VK_IMAGE_CREATE_PROTECTED_BIT },
-    { (uint64_t)AHARDWAREBUFFER_USAGE_GPU_MIPMAP_COMPLETE,  0 },   // No equivalent 
+    { (uint64_t)AHARDWAREBUFFER_USAGE_GPU_MIPMAP_COMPLETE,  0 },   // No equivalent
 };
 
 std::map<VkImageUsageFlags, uint64_t> ahb_usage_map_v2a = {
@@ -5264,6 +5271,287 @@ void CoreChecks::PostCallRecordCreateComputePipelines(VkDevice device, VkPipelin
     }
 }
 
+static VkDeviceSize GetIndexAlignment(VkIndexType indexType) {
+    switch (indexType) {
+        case VK_INDEX_TYPE_UINT16:
+            return 2;
+        case VK_INDEX_TYPE_UINT32:
+            return 4;
+        default:
+            // Not a real index type. Express no alignment requirement here; we expect upper layer
+            // to have already picked up on the enum being nonsense.
+            return 1;
+    }
+}
+
+bool CoreChecks::ValidateGeometryNV(const char *caller_name, const VkGeometryNV *pGeometry) {
+    bool skip = false;
+
+    if (pGeometry->geometryType == VK_GEOMETRY_TYPE_TRIANGLES_NV) {
+        const auto pGeoTri = &pGeometry->geometry.triangles;
+        if (pGeoTri->indexType == VK_INDEX_TYPE_NONE_NV) {
+            if (pGeoTri->indexCount != 0) {
+                skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                                "VUID-VkGeometryTrianglesNV-indexCount-02436",
+                                "%s: geometry.triangles.indexType is VK_INDEX_TYPE_NONE_NV, yet has a non-zero indexCount (%d)",
+                                caller_name, pGeoTri->indexCount);
+            }
+
+            if (pGeoTri->indexData != VK_NULL_HANDLE) {
+                skip |=
+                    log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkGeometryTrianglesNV-indexData-02434",
+                            "%s: geometry.triangles.indexType is VK_INDEX_TYPE_NONE_NV, yet has a non-null indexData handle (%s)",
+                            caller_name, report_data->FormatHandle(pGeoTri->indexData).c_str());
+            }
+        } else if (pGeoTri->indexType == VK_INDEX_TYPE_UINT16 || VK_INDEX_TYPE_UINT32) {
+            const auto index_buffer_state = GetBufferState(pGeoTri->indexData);
+
+            if (!index_buffer_state) {
+                skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                                "VUID-VkGeometryTrianglesNV-indexData-02435",
+                                "%s: geometry.triangles.indexType (%s) specifies that an index buffer is required, yet an invalid "
+                                "indexData buffer handle was passed (%s)",
+                                caller_name, string_VkIndexType(pGeoTri->indexType),
+                                report_data->FormatHandle(pGeoTri->indexData).c_str());
+            }
+
+            if (pGeoTri->indexOffset > index_buffer_state->createInfo.size) {
+                skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                                "VUID-VkGeometryTrianglesNV-indexOffset-02431",
+                                "%s: geometry.triangles.indexOffset (0x%" PRIxLEAST64
+                                ") is beyond the end of the buffer (buffer size is 0x%" PRIxLEAST64 ")",
+                                caller_name, pGeoTri->indexOffset, index_buffer_state->createInfo.size);
+            }
+
+            const auto indexAlignment = GetIndexAlignment(pGeoTri->indexType);
+            if (pGeoTri->indexOffset % indexAlignment) {
+                skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                                "VUID-VkGeometryTrianglesNV-indexOffset-02432",
+                                "%s: geometry.triangles.indexOffset (0x%" PRIxLEAST64 ") must be aligned to 0x%02x", caller_name,
+                                pGeoTri->indexOffset, indexAlignment);
+            }
+
+            if (pGeoTri->transformData != VK_NULL_HANDLE) {
+                const auto transform_buffer_state = GetBufferState(pGeoTri->transformData);
+                assert(transform_buffer_state);
+
+                if (pGeoTri->transformOffset > transform_buffer_state->createInfo.size) {
+                    skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                                    "VUID-VkGeometryTrianglesNV-transformOffset-02437",
+                                    "%s: geometry.triangles.transformOffset (0x%" PRIxLEAST64
+                                    ") is beyond the end of the buffer (buffer size is 0x%" PRIxLEAST64 ")",
+                                    caller_name, pGeoTri->transformOffset, transform_buffer_state->createInfo.size);
+                }
+
+                if (pGeoTri->transformOffset % 0x10) {
+                    skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                                    "VUID-VkGeometryTrianglesNV-transformOffset-02438",
+                                    "%s: geometry.triangles.transformOffset (0x%" PRIxLEAST64 ") must be aligned to 0x10",
+                                    caller_name, pGeoTri->transformOffset);
+                }
+            }
+        } else {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkGeometryTrianglesNV-indexType-02433", "%s: geometry.triangles.indexType (0x%04x) is invalid",
+                            caller_name, pGeoTri->indexType);
+        }
+
+        switch (pGeoTri->vertexFormat) {
+            case VK_FORMAT_R32G32B32_SFLOAT:
+            case VK_FORMAT_R32G32_SFLOAT:
+            case VK_FORMAT_R16G16B16_SFLOAT:
+            case VK_FORMAT_R16G16_SFLOAT:
+            case VK_FORMAT_R16G16_SNORM:
+            case VK_FORMAT_R16G16B16_SNORM:
+                // Valid.
+                break;
+            default:
+                skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                                "VUID-VkGeometryTrianglesNV-vertexFormat-02430",
+                                "%s: geometry.triangles.vertexFormat (%s) is not one of the supported ray-tracing vertex formats", caller_name,
+                                string_VkFormat(pGeoTri->vertexFormat));
+                break;
+        }
+
+        const auto vertex_buffer_state = GetBufferState(pGeoTri->vertexData);
+        assert(vertex_buffer_state);
+
+        if (pGeoTri->vertexOffset > vertex_buffer_state->createInfo.size) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkGeometryTrianglesNV-vertexOffset-02428",
+                            "%s: geometry.triangles.vertexOffset (0x%" PRIxLEAST64
+                            ") is beyond the end of the buffer (buffer size is 0x%" PRIxLEAST64 ")",
+                            caller_name, pGeoTri->vertexOffset, vertex_buffer_state->createInfo.size);
+        }
+
+        const auto vertexAlignment = FormatElementSize(pGeoTri->vertexFormat);
+        if (pGeoTri->vertexOffset % vertexAlignment) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkGeometryTrianglesNV-vertexOffset-02429",
+                            "%s: geometry.triangles.vertexOffset (0x%" PRIxLEAST64 ") must be aligned to 0x%02x", caller_name, pGeoTri->vertexOffset,
+                            vertexAlignment);
+        }
+    } else if (pGeometry->geometryType == VK_GEOMETRY_TYPE_AABBS_NV) {
+        const auto pGeoAABB = &pGeometry->geometry.aabbs;
+
+        const auto aabb_buffer_state = GetBufferState(pGeoAABB->aabbData);
+        // TODO(jstpierre): There is an implicit VU for this which is currently unimplemented:
+        // VUID-VkGeometryAABBNV-aabbData-parameter
+        assert(aabb_buffer_state);
+
+        if (pGeoAABB->offset > aabb_buffer_state->createInfo.size) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkGeometryAABBNV-offset-02439",
+                            "%s: geometry.aabbs.offset (0x%" PRIxLEAST64
+                            ") is beyond the end of the buffer (buffer size is 0x%" PRIxLEAST64 ")",
+                            caller_name, pGeoAABB->offset, aabb_buffer_state->createInfo.size);
+        }
+
+        if (pGeoAABB->offset % 0x08) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkGeometryAABBNV-offset-02440",
+                            "%s: geometry.aabbs.offset (0x%" PRIxLEAST64 ") must be aligned to 0x08", caller_name, pGeoAABB->offset);
+        }
+
+        if (pGeoAABB->offset % 0x08) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkGeometryAABBNV-stride-02441",
+                            "%s: geometry.aabbs.stride (0x%" PRIxLEAST64 ") must be aligned to 0x08", caller_name, pGeoAABB->offset);
+        }
+    }
+
+    return skip;
+}
+
+bool CoreChecks::PreCallValidateCreateAccelerationStructureNV(VkDevice device,
+                                                              const VkAccelerationStructureCreateInfoNV *pCreateInfo,
+                                                              const VkAllocationCallbacks *pAllocator,
+                                                              VkAccelerationStructureNV *pAccelerationStructure) {
+    bool skip = false;
+
+    if (pCreateInfo->compactedSize != 0) {
+        if (pCreateInfo->info.geometryCount != 0) {
+            skip |=
+                log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                        "VUID-VkAccelerationStructureCreateInfoNV-compactedSize-02421",
+                        "vkCreateAccelerationStructureNV(): Acceleration structure created with a non-zero compactedSize; geometrySize should be 0 but is instead %d",
+                        pCreateInfo->info.geometryCount);
+        }
+        if (pCreateInfo->info.instanceCount != 0) {
+            skip |=
+                log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                        "VUID-VkAccelerationStructureCreateInfoNV-compactedSize-02421",
+                        "vkCreateAccelerationStructureNV(): Acceleration structure created with a non-zero compactedSize; instanceCount should be 0 but is instead %d",
+                        pCreateInfo->info.geometryCount);
+        }
+    }
+
+    if (pCreateInfo->info.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_NV) {
+        if (pCreateInfo->info.geometryCount != 0) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkAccelerationStructureInfoNV-type-02425",
+                            "vkCreateAccelerationStructureNV(): top-level acceleration structure has a non-zero geometryCount (%d)",
+                            pCreateInfo->info.geometryCount);
+        }
+
+        if (pCreateInfo->info.instanceCount > phys_dev_ext_props.ray_tracing_props.maxInstanceCount) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkAccelerationStructureInfoNV-instanceCount-02423",
+                            "vkCreateAccelerationStructureNV(): top-level acceleration structure has an instanceCount (%d) that "
+                            "exceeds this device's "
+                            "maxInstanceCount (%d)",
+                            pCreateInfo->info.instanceCount);
+        }
+    } else if (pCreateInfo->info.type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_NV) {
+        if (pCreateInfo->info.instanceCount != 0) {
+            skip |=
+                log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                        "VUID-VkAccelerationStructureInfoNV-type-02426",
+                        "vkCreateAccelerationStructureNV(): bottom-level acceleration structure has a non-zero instanceCount (%d)",
+                        pCreateInfo->info.instanceCount);
+        }
+
+        if (pCreateInfo->info.geometryCount > phys_dev_ext_props.ray_tracing_props.maxGeometryCount) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkAccelerationStructureInfoNV-geometryCount-02422",
+                            "vkCreateAccelerationStructureNV(): bottom-level acceleration structure has a geometryCount (%d) that "
+                            "exceeds this device's "
+                            "maxGeometryCount (%d)",
+                            phys_dev_ext_props.ray_tracing_props.maxGeometryCount);
+        }
+
+        for (size_t i = 0; i < pCreateInfo->info.geometryCount; i++) {
+            const auto pGeometry = &pCreateInfo->info.pGeometries[i];
+            skip |= ValidateGeometryNV("vkCreateAccelerationStructureNV()", pGeometry);
+        }
+    }
+
+    return skip;
+}
+
+bool CoreChecks::ValidateRayTracingPipelineNVLocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines, uint32_t pipelineIndex) {
+    bool skip = false;
+
+    const PIPELINE_STATE* pPipeline = pPipelines[pipelineIndex].get();
+
+    // If create derivative bit is set, check that we've specified a base
+    // pipeline correctly, and that the base pipeline was created to allow
+    // derivatives.
+    if (pPipeline->raytracingPipelineCI.flags & VK_PIPELINE_CREATE_DERIVATIVE_BIT) {
+        PIPELINE_STATE *pBasePipeline = nullptr;
+        if (!((pPipeline->raytracingPipelineCI.basePipelineHandle != VK_NULL_HANDLE) ^
+              (pPipeline->raytracingPipelineCI.basePipelineIndex != -1))) {
+            // This check is a superset of "VUID-VkRayTracingPipelineCreateInfoNV-flags-02406" and
+            // "VUID-VkRayTracingPipelineCreateInfoNV-flags-02407"
+            (void) "VUID-VkRayTracingPipelineCreateInfoNV-flags-02406";
+            (void) "VUID-VkRayTracingPipelineCreateInfoNV-flags-02407";
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
+                            HandleToUint64(pPipeline->pipeline), kVUID_Core_DrawState_InvalidPipelineCreateState,
+                            "vkCreateRayTracingPipelinesNV(): exactly one of base pipeline index and handle must be specified");
+        } else if (pPipeline->raytracingPipelineCI.basePipelineIndex != -1) {
+            if (pPipeline->raytracingPipelineCI.basePipelineIndex >= int32_t(pipelineIndex)) {
+                skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
+                                HandleToUint64(pPipeline->pipeline), "VUID-vkCreateRayTracingPipelinesNV-flags-02402",
+                                "vkCreateRayTracingPipelinesNV(): base pipeline must occur earlier in array than derivative pipeline.");
+            } else {
+                pBasePipeline = pPipelines[pPipeline->raytracingPipelineCI.basePipelineIndex].get();
+            }
+        } else if (pPipeline->raytracingPipelineCI.basePipelineHandle != VK_NULL_HANDLE) {
+            pBasePipeline = GetPipelineState(pPipeline->raytracingPipelineCI.basePipelineHandle);
+        }
+
+        if (pBasePipeline && !(pBasePipeline->raytracingPipelineCI.flags & VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT)) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
+                            HandleToUint64(pPipeline->pipeline), "VUID-vkCreateRayTracingPipelinesNV-flags-02403",
+                            "vkCreateRayTracingPipelinesNV(): base pipeline does not allow derivatives.");
+        }
+    }
+
+    return skip;
+}
+
+bool CoreChecks::ValidateRayTracingPipelineNVUnlocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines, uint32_t pipelineIndex) {
+    bool skip = false;
+
+    const PIPELINE_STATE *pPipeline = pPipelines[pipelineIndex].get();
+
+    if (pPipeline->raytracingPipelineCI.maxRecursionDepth > phys_dev_ext_props.ray_tracing_props.maxRecursionDepth) {
+        skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
+                        HandleToUint64(pPipeline->pipeline), "VUID-VkRayTracingPipelineCreateInfoNV-maxRecursionDepth-02412",
+                        "vkCreateRayTracingPipelinesNV(): maxRecursionDepth (%d) exceeds the device's maxRecursionDepth (%d)",
+                        pPipeline->raytracingPipelineCI.maxRecursionDepth, phys_dev_ext_props.ray_tracing_props.maxRecursionDepth);
+    }
+
+    if (!(pPipeline->active_shaders & VK_SHADER_STAGE_RAYGEN_BIT_NV)) {
+        skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
+                        HandleToUint64(pPipeline->pipeline), "VUID-VkRayTracingPipelineCreateInfoNV-stage-02408",
+                        "vkCreateRayTracingPipelinesNV(): Pipeline is missing required VK_SHADER_STAGE_RAYGEN_BIT_NV stage");
+    }
+
+    return skip;
+}
+
 bool CoreChecks::PreCallValidateCreateRayTracingPipelinesNV(VkDevice device, VkPipelineCache pipelineCache, uint32_t count,
                                                             const VkRayTracingPipelineCreateInfoNV *pCreateInfos,
                                                             const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines,
@@ -5281,6 +5569,14 @@ bool CoreChecks::PreCallValidateCreateRayTracingPipelinesNV(VkDevice device, VkP
         pipe_state->push_back(std::unique_ptr<PIPELINE_STATE>(new PIPELINE_STATE));
         (*pipe_state)[i]->initRayTracingPipelineNV(&pCreateInfos[i]);
         (*pipe_state)[i]->pipeline_layout = *GetPipelineLayout(pCreateInfos[i].layout);
+    }
+
+    for (i = 0; i < count; i++) {
+        skip |= ValidateRayTracingPipelineNVLocked(*pipe_state, i);
+    }
+
+    for (i = 0; i < count; i++) {
+        skip |= ValidateRayTracingPipelineNVUnlocked(*pipe_state, i);
     }
 
     for (i = 0; i < count; i++) {
@@ -5432,13 +5728,14 @@ enum DSL_DESCRIPTOR_GROUPS {
     DSL_TYPE_STORAGE_IMAGES,
     DSL_TYPE_INPUT_ATTACHMENTS,
     DSL_TYPE_INLINE_UNIFORM_BLOCK,
+    DSL_TYPE_ACCELERATION_STRUCTURES_NV,
     DSL_NUM_DESCRIPTOR_GROUPS
 };
 
 // Used by PreCallValidateCreatePipelineLayout.
 // Returns an array of size DSL_NUM_DESCRIPTOR_GROUPS of the maximum number of descriptors used in any single pipeline stage
 std::valarray<uint32_t> GetDescriptorCountMaxPerStage(
-    const DeviceFeatures *enabled_features,
+    const DeviceFeatures *enabled_features, const DeviceExtensions *device_extensions,
     const std::vector<std::shared_ptr<cvdescriptorset::DescriptorSetLayout const>> set_layouts, bool skip_update_after_bind) {
     // Identify active pipeline stages
     std::vector<VkShaderStageFlags> stage_flags = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -5450,11 +5747,20 @@ std::valarray<uint32_t> GetDescriptorCountMaxPerStage(
         stage_flags.push_back(VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
         stage_flags.push_back(VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT);
     }
+    if (device_extensions->vk_nv_ray_tracing) {
+        stage_flags.push_back(VK_SHADER_STAGE_RAYGEN_BIT_NV);
+        stage_flags.push_back(VK_SHADER_STAGE_ANY_HIT_BIT_NV);
+        stage_flags.push_back(VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV);
+        stage_flags.push_back(VK_SHADER_STAGE_MISS_BIT_NV);
+        stage_flags.push_back(VK_SHADER_STAGE_INTERSECTION_BIT_NV);
+        stage_flags.push_back(VK_SHADER_STAGE_CALLABLE_BIT_NV);
+    }
 
     // Allow iteration over enum values
     std::vector<DSL_DESCRIPTOR_GROUPS> dsl_groups = {
-        DSL_TYPE_SAMPLERS,       DSL_TYPE_UNIFORM_BUFFERS,   DSL_TYPE_STORAGE_BUFFERS,     DSL_TYPE_SAMPLED_IMAGES,
-        DSL_TYPE_STORAGE_IMAGES, DSL_TYPE_INPUT_ATTACHMENTS, DSL_TYPE_INLINE_UNIFORM_BLOCK};
+        DSL_TYPE_SAMPLERS,       DSL_TYPE_UNIFORM_BUFFERS,   DSL_TYPE_STORAGE_BUFFERS,      DSL_TYPE_SAMPLED_IMAGES,
+        DSL_TYPE_STORAGE_IMAGES, DSL_TYPE_INPUT_ATTACHMENTS, DSL_TYPE_INLINE_UNIFORM_BLOCK, DSL_TYPE_ACCELERATION_STRUCTURES_NV,
+    };
 
     // Sum by layouts per stage, then pick max of stages per type
     std::valarray<uint32_t> max_sum(0U, DSL_NUM_DESCRIPTOR_GROUPS);  // max descriptor sum among all pipeline stages
@@ -5496,6 +5802,9 @@ std::valarray<uint32_t> GetDescriptorCountMaxPerStage(
                             break;
                         case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
                             stage_sum[DSL_TYPE_INPUT_ATTACHMENTS] += binding->descriptorCount;
+                            break;
+                        case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
+                            stage_sum[DSL_TYPE_ACCELERATION_STRUCTURES_NV] += binding->descriptorCount;
                             break;
                         case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
                             // count one block per binding. descriptorCount is number of bytes
@@ -5595,7 +5904,8 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
     }
 
     // Max descriptors by type, within a single pipeline stage
-    std::valarray<uint32_t> max_descriptors_per_stage = GetDescriptorCountMaxPerStage(&enabled_features, set_layouts, true);
+    std::valarray<uint32_t> max_descriptors_per_stage =
+        GetDescriptorCountMaxPerStage(&enabled_features, &device_extensions, set_layouts, true);
     // Samplers
     if (max_descriptors_per_stage[DSL_TYPE_SAMPLERS] > phys_dev_props.limits.maxPerStageDescriptorSamplers) {
         skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
@@ -5764,7 +6074,7 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
 
         // Max descriptors by type, within a single pipeline stage
         std::valarray<uint32_t> max_descriptors_per_stage_update_after_bind =
-            GetDescriptorCountMaxPerStage(&enabled_features, set_layouts, false);
+            GetDescriptorCountMaxPerStage(&enabled_features, &device_extensions, set_layouts, false);
         // Samplers
         if (max_descriptors_per_stage_update_after_bind[DSL_TYPE_SAMPLERS] >
             phys_dev_ext_props.descriptor_indexing_props.maxPerStageDescriptorUpdateAfterBindSamplers) {
@@ -5943,6 +6253,17 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
                             "maxDescriptorSetUpdateAfterBindInlineUniformBlocks limit (%d).",
                             sum_all_stages_update_after_bind[VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT],
                             phys_dev_ext_props.inline_uniform_block_props.maxDescriptorSetUpdateAfterBindInlineUniformBlocks);
+        }
+
+        // Acceleration structures
+        if (sum_all_stages[VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV] >
+            phys_dev_ext_props.ray_tracing_props.maxDescriptorSetAccelerationStructures) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkPipelineLayoutCreateInfo-descriptorType-02381",
+                            "vkCreatePipelineLayout(): sum of acceleration structure bindings among all stages (%d) exceeds device "
+                            "maxDescriptorSetAccelerationStructures limit (%d).",
+                            sum_all_stages[VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV],
+                            phys_dev_ext_props.ray_tracing_props.maxDescriptorSetAccelerationStructures);
         }
     }
     return skip;
@@ -7143,19 +7464,6 @@ void CoreChecks::PreCallRecordCmdPushDescriptorSetKHR(VkCommandBuffer commandBuf
     RecordCmdPushDescriptorSetState(cb_state, pipelineBindPoint, layout, set, descriptorWriteCount, pDescriptorWrites);
 }
 
-static VkDeviceSize GetIndexAlignment(VkIndexType indexType) {
-    switch (indexType) {
-        case VK_INDEX_TYPE_UINT16:
-            return 2;
-        case VK_INDEX_TYPE_UINT32:
-            return 4;
-        default:
-            // Not a real index type. Express no alignment requirement here; we expect upper layer
-            // to have already picked up on the enum being nonsense.
-            return 1;
-    }
-}
-
 bool CoreChecks::PreCallValidateCmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
                                                    VkIndexType indexType) {
     auto buffer_state = GetBufferState(buffer);
@@ -7170,6 +7478,11 @@ bool CoreChecks::PreCallValidateCmdBindIndexBuffer(VkCommandBuffer commandBuffer
                                   "VUID-vkCmdBindIndexBuffer-commandBuffer-cmdpool");
     skip |= ValidateCmd(cb_node, CMD_BINDINDEXBUFFER, "vkCmdBindIndexBuffer()");
     skip |= ValidateMemoryIsBoundToBuffer(buffer_state, "vkCmdBindIndexBuffer()", "VUID-vkCmdBindIndexBuffer-buffer-00434");
+    if (indexType == VK_INDEX_TYPE_NONE_NV) {
+        skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT,
+                        HandleToUint64(commandBuffer), "VUID-vkCmdBindIndexBuffer-indexType-02507",
+                        "vkCmdBindIndexBuffer(): indexType cannot be VK_INDEX_TYPE_NONE_NV");
+    }
     auto offset_align = GetIndexAlignment(indexType);
     if (offset % offset_align) {
         skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_COMMAND_BUFFER_EXT,
@@ -11356,10 +11669,10 @@ bool CoreChecks::ValidateCreateSwapchain(const char *func_name, VkSwapchainCreat
 
         if (device_extensions.vk_khr_surface_protected_capabilities &&
             (pCreateInfo->flags & VK_SWAPCHAIN_CREATE_PROTECTED_BIT_KHR)) {
-            VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR };
+            VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR};
             surfaceInfo.surface = pCreateInfo->surface;
-            VkSurfaceProtectedCapabilitiesKHR surfaceProtectedCapabilities = { VK_STRUCTURE_TYPE_SURFACE_PROTECTED_CAPABILITIES_KHR };
-            VkSurfaceCapabilities2KHR surfaceCapabilities = { VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR };
+            VkSurfaceProtectedCapabilitiesKHR surfaceProtectedCapabilities = {VK_STRUCTURE_TYPE_SURFACE_PROTECTED_CAPABILITIES_KHR};
+            VkSurfaceCapabilities2KHR surfaceCapabilities = {VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
             surfaceCapabilities.pNext = &surfaceProtectedCapabilities;
             DispatchGetPhysicalDeviceSurfaceCapabilities2KHR(physical_device_state->phys_device, &surfaceInfo,
                                                              &surfaceCapabilities);
