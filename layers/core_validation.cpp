@@ -5369,8 +5369,8 @@ bool CoreChecks::ValidateGeometryNV(const char *caller_name, const VkGeometryNV 
             default:
                 skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
                                 "VUID-VkGeometryTrianglesNV-vertexFormat-02430",
-                                "%s: geometry.triangles.vertexFormat (%s) is not one of the supported ray-tracing vertex formats", caller_name,
-                                string_VkFormat(pGeoTri->vertexFormat));
+                                "%s: geometry.triangles.vertexFormat (%s) is not one of the supported ray-tracing vertex formats",
+                                caller_name, string_VkFormat(pGeoTri->vertexFormat));
                 break;
         }
 
@@ -5389,8 +5389,8 @@ bool CoreChecks::ValidateGeometryNV(const char *caller_name, const VkGeometryNV 
         if (pGeoTri->vertexOffset % vertexAlignment) {
             skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
                             "VUID-VkGeometryTrianglesNV-vertexOffset-02429",
-                            "%s: geometry.triangles.vertexOffset (0x%" PRIxLEAST64 ") must be aligned to 0x%02x", caller_name, pGeoTri->vertexOffset,
-                            vertexAlignment);
+                            "%s: geometry.triangles.vertexOffset (0x%" PRIxLEAST64 ") must be aligned to 0x%02x", caller_name,
+                            pGeoTri->vertexOffset, vertexAlignment);
         }
     } else if (pGeometry->geometryType == VK_GEOMETRY_TYPE_AABBS_NV) {
         const auto pGeoAABB = &pGeometry->geometry.aabbs;
@@ -5409,19 +5409,34 @@ bool CoreChecks::ValidateGeometryNV(const char *caller_name, const VkGeometryNV 
         }
 
         if (pGeoAABB->offset % 0x08) {
-            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
-                            "VUID-VkGeometryAABBNV-offset-02440",
-                            "%s: geometry.aabbs.offset (0x%" PRIxLEAST64 ") must be aligned to 0x08", caller_name, pGeoAABB->offset);
+            skip |=
+                log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                        "VUID-VkGeometryAABBNV-offset-02440",
+                        "%s: geometry.aabbs.offset (0x%" PRIxLEAST64 ") must be aligned to 0x08", caller_name, pGeoAABB->offset);
         }
 
         if (pGeoAABB->offset % 0x08) {
-            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
-                            "VUID-VkGeometryAABBNV-stride-02441",
-                            "%s: geometry.aabbs.stride (0x%" PRIxLEAST64 ") must be aligned to 0x08", caller_name, pGeoAABB->offset);
+            skip |=
+                log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                        "VUID-VkGeometryAABBNV-stride-02441",
+                        "%s: geometry.aabbs.stride (0x%" PRIxLEAST64 ") must be aligned to 0x08", caller_name, pGeoAABB->offset);
         }
     }
 
     return skip;
+}
+
+static size_t CalcTriangleCount(const VkGeometryNV* pGeometry) {
+    if (pGeometry->geometryType == VK_GEOMETRY_TYPE_TRIANGLES_NV) {
+        const auto &triangles = pGeometry->geometry.triangles;
+        if (triangles.indexType == VK_INDEX_TYPE_NONE_NV) {
+            return triangles.vertexCount / 3;
+        } else {
+            return triangles.indexCount / 3;
+        }
+    }
+
+    return 0;
 }
 
 bool CoreChecks::PreCallValidateCreateAccelerationStructureNV(VkDevice device,
@@ -5432,18 +5447,18 @@ bool CoreChecks::PreCallValidateCreateAccelerationStructureNV(VkDevice device,
 
     if (pCreateInfo->compactedSize != 0) {
         if (pCreateInfo->info.geometryCount != 0) {
-            skip |=
-                log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
-                        "VUID-VkAccelerationStructureCreateInfoNV-compactedSize-02421",
-                        "vkCreateAccelerationStructureNV(): Acceleration structure created with a non-zero compactedSize; geometrySize should be 0 but is instead %d",
-                        pCreateInfo->info.geometryCount);
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkAccelerationStructureCreateInfoNV-compactedSize-02421",
+                            "vkCreateAccelerationStructureNV(): Acceleration structure created with a non-zero compactedSize; "
+                            "geometrySize should be 0 but is instead %d",
+                            pCreateInfo->info.geometryCount);
         }
         if (pCreateInfo->info.instanceCount != 0) {
-            skip |=
-                log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
-                        "VUID-VkAccelerationStructureCreateInfoNV-compactedSize-02421",
-                        "vkCreateAccelerationStructureNV(): Acceleration structure created with a non-zero compactedSize; instanceCount should be 0 but is instead %d",
-                        pCreateInfo->info.geometryCount);
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkAccelerationStructureCreateInfoNV-compactedSize-02421",
+                            "vkCreateAccelerationStructureNV(): Acceleration structure created with a non-zero compactedSize; "
+                            "instanceCount should be 0 but is instead %d",
+                            pCreateInfo->info.geometryCount);
         }
     }
 
@@ -5461,7 +5476,7 @@ bool CoreChecks::PreCallValidateCreateAccelerationStructureNV(VkDevice device,
                             "vkCreateAccelerationStructureNV(): top-level acceleration structure has an instanceCount (%d) that "
                             "exceeds this device's "
                             "maxInstanceCount (%d)",
-                            pCreateInfo->info.instanceCount);
+                            pCreateInfo->info.instanceCount, phys_dev_ext_props.ray_tracing_props.maxInstanceCount);
         }
     } else if (pCreateInfo->info.type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_NV) {
         if (pCreateInfo->info.instanceCount != 0) {
@@ -5478,22 +5493,33 @@ bool CoreChecks::PreCallValidateCreateAccelerationStructureNV(VkDevice device,
                             "vkCreateAccelerationStructureNV(): bottom-level acceleration structure has a geometryCount (%d) that "
                             "exceeds this device's "
                             "maxGeometryCount (%d)",
-                            phys_dev_ext_props.ray_tracing_props.maxGeometryCount);
+                            pCreateInfo->info.geometryCount, phys_dev_ext_props.ray_tracing_props.maxGeometryCount);
         }
 
+        size_t totalTriangles = 0;
         for (size_t i = 0; i < pCreateInfo->info.geometryCount; i++) {
             const auto pGeometry = &pCreateInfo->info.pGeometries[i];
             skip |= ValidateGeometryNV("vkCreateAccelerationStructureNV()", pGeometry);
+            totalTriangles += CalcTriangleCount(pGeometry);
+        }
+
+        if (totalTriangles > phys_dev_ext_props.ray_tracing_props.maxTriangleCount) {
+            skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT, 0,
+                            "VUID-VkAccelerationStructureInfoNV-maxTriangleCount-02424",
+                            "vkCreateAccelerationStructureNV(): total number of triangles in all geometries (%d) is greater than "
+                            "VkPhysicalDeviceRayTracingPropertiesNV::maxTriangleCount (%d)",
+                            totalTriangles, phys_dev_ext_props.ray_tracing_props.maxTriangleCount);
         }
     }
 
     return skip;
 }
 
-bool CoreChecks::ValidateRayTracingPipelineNVLocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines, uint32_t pipelineIndex) {
+bool CoreChecks::ValidateRayTracingPipelineNVLocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines,
+                                                    uint32_t pipelineIndex) {
     bool skip = false;
 
-    const PIPELINE_STATE* pPipeline = pPipelines[pipelineIndex].get();
+    const PIPELINE_STATE *pPipeline = pPipelines[pipelineIndex].get();
 
     // If create derivative bit is set, check that we've specified a base
     // pipeline correctly, and that the base pipeline was created to allow
@@ -5504,16 +5530,17 @@ bool CoreChecks::ValidateRayTracingPipelineNVLocked(std::vector<std::unique_ptr<
               (pPipeline->raytracingPipelineCI.basePipelineIndex != -1))) {
             // This check is a superset of "VUID-VkRayTracingPipelineCreateInfoNV-flags-02406" and
             // "VUID-VkRayTracingPipelineCreateInfoNV-flags-02407"
-            (void) "VUID-VkRayTracingPipelineCreateInfoNV-flags-02406";
-            (void) "VUID-VkRayTracingPipelineCreateInfoNV-flags-02407";
+            (void)"VUID-VkRayTracingPipelineCreateInfoNV-flags-02406";
+            (void)"VUID-VkRayTracingPipelineCreateInfoNV-flags-02407";
             skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
                             HandleToUint64(pPipeline->pipeline), kVUID_Core_DrawState_InvalidPipelineCreateState,
                             "vkCreateRayTracingPipelinesNV(): exactly one of base pipeline index and handle must be specified");
         } else if (pPipeline->raytracingPipelineCI.basePipelineIndex != -1) {
             if (pPipeline->raytracingPipelineCI.basePipelineIndex >= int32_t(pipelineIndex)) {
-                skip |= log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
-                                HandleToUint64(pPipeline->pipeline), "VUID-vkCreateRayTracingPipelinesNV-flags-02402",
-                                "vkCreateRayTracingPipelinesNV(): base pipeline must occur earlier in array than derivative pipeline.");
+                skip |=
+                    log_msg(report_data, VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
+                            HandleToUint64(pPipeline->pipeline), "VUID-vkCreateRayTracingPipelinesNV-flags-02402",
+                            "vkCreateRayTracingPipelinesNV(): base pipeline must occur earlier in array than derivative pipeline.");
             } else {
                 pBasePipeline = pPipelines[pPipeline->raytracingPipelineCI.basePipelineIndex].get();
             }
@@ -5531,7 +5558,8 @@ bool CoreChecks::ValidateRayTracingPipelineNVLocked(std::vector<std::unique_ptr<
     return skip;
 }
 
-bool CoreChecks::ValidateRayTracingPipelineNVUnlocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines, uint32_t pipelineIndex) {
+bool CoreChecks::ValidateRayTracingPipelineNVUnlocked(std::vector<std::unique_ptr<PIPELINE_STATE>> const &pPipelines,
+                                                      uint32_t pipelineIndex) {
     bool skip = false;
 
     const PIPELINE_STATE *pPipeline = pPipelines[pipelineIndex].get();
